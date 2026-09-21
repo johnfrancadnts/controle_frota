@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /frota/{collection}/{document} {
+      // Regra inicial para o site estático.
+      // Para produção, substitua por Firebase Authentication + permissões por usuário.
+      allow read, write: if true;
+    }
+  }
+}

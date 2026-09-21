@@ -1,0 +1,10 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /carros/{fileName} {
+      // Regra inicial para o site estático.
+      // Para produção, substitua por Firebase Authentication + permissões por usuário.
+      allow read, write: if true;
+    }
+  }
+}
