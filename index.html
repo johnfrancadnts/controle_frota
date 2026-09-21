@@ -715,7 +715,7 @@ function adminTab(t){
         <td>${dt(b.actualPickupAt||b.start)}</td>
         <td>${badge(b.status)}</td>
         <td>${b.actualReturnId?`${esc(emp(b.actualReturnId)?.name||'—')}<div class="tiny">${dt(b.actualReturnAt)}</div>`:'Ainda não devolvido'}</td>
-        <td>${b.returnPhoto?'<span class="tiny">FOTO SALVA</span>':'<span class="tiny">—</span>'}</td>
+        <td>${b.returnPhoto?`<button class="btn dark" style="padding:6px 10px;font-size:11px" onclick="viewReturnPhoto('${b.id}')">VER FOTO</button>`:'<span class="tiny">—</span>'}</td>
         <td>${esc(b.actualPickupAt?durationStr(new Date(b.actualReturnAt||new Date())-new Date(b.actualPickupAt)):'—')}</td>
       </tr>`).join('')||'<tr><td colspan="8"><div class="empty">Sem registros.</div></td></tr>'}</tbody></table></div>
     </section>`;
@@ -928,6 +928,11 @@ function generatePickupPDF(){
 
   closeModal();
   setTimeout(()=>window.print(),80);
+}
+function viewReturnPhoto(id){
+ const b=data.bookings.find(x=>x.id===id)||data.history.find(x=>x.id===id);
+ if(!b?.returnPhoto)return alert('Esta devolução não possui mais uma foto salva.');
+ openModal('Foto da devolução',`<div style="display:flex;justify-content:center;align-items:center;min-height:300px;background:#f3f5f7;border-radius:12px;padding:12px"><img src="${b.returnPhoto}" alt="Foto da devolução" style="max-width:100%;max-height:70vh;object-fit:contain;border-radius:8px"></div><div class="tiny" style="margin-top:10px;text-align:center">${esc(emp(b.actualReturnId||b.actualPickupId)?.name||'Funcionário')} • ${b.actualReturnAt?dt(b.actualReturnAt):'Data não registrada'}</div>`,`<button class="btn dark" onclick="closeModal()">FECHAR</button>`);
 }
 async function deleteReturnPhotos(){
  const count=data.bookings.filter(b=>b.returnPhoto).length+data.history.filter(h=>h.returnPhoto).length;
