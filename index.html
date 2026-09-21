@@ -640,6 +640,34 @@ function durationStr(ms){
   const min=Math.max(0,Math.round(ms/60000)),h=Math.floor(min/60),m=min%60;
   return `${h?`${h}h `:''}${m}min`;
 }
+function prepareCarPhoto(file){
+  return new Promise((resolve,reject)=>{
+    if(!file)return resolve('');
+    if(!String(file.type||'').startsWith('image/')) return reject(new Error('FORMATO_INVALIDO'));
+    if(file.size>10*1024*1024)return reject(new Error('TAMANHO_INVALIDO'));
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('LEITURA_INVALIDA'));
+    reader.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        const maxW=1000,maxH=700;
+        const scale=Math.min(1,maxW/img.width,maxH/img.height);
+        const w=Math.max(1,Math.round(img.width*scale)),h=Math.max(1,Math.round(img.height*scale));
+        const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+        const ctx=canvas.getContext('2d');
+        ctx.drawImage(img,0,0,w,h);
+        // A imagem pode ser PNG/JPG normalmente no seletor; para o Firestore usamos
+        // uma cópia comprimida que cabe no documento e continua vinculada ao carro.
+        const out=canvas.toDataURL('image/jpeg',0.78);
+        if(out.length>900000)return reject(new Error('IMAGEM_GRANDE'));
+        resolve(out);
+      };
+      img.onerror=()=>reject(new Error('IMAGEM_INVALIDA'));
+      img.src=reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 function previewCarPhoto(input){
   const file=input.files?.[0];
   if(!file)return;
@@ -659,48 +687,30 @@ async function addCar(){
   if(data.cars.some(c=>Number(c.number)===n))return alert('Esse número de frota já está em uso.');
   if(!firebaseReady)return alert('O Firebase ainda não terminou de carregar. Aguarde um instante e tente novamente.');
 
-  const id=uuid();
-  const carObj={id,model,plate,seats,number:n};
-  data.cars.push(carObj);
-  try{
-    await save();
-  }catch(e){
-    data.cars=data.cars.filter(c=>c.id!==id);
-    console.error('Erro ao salvar carro:',e);
-    return alert('Não foi possível salvar o carro no Firebase. Verifique as regras do Firestore.');
-  }
-
-  // A foto não pode impedir o cadastro do carro. Se o Storage estiver bloqueado,
-  // o carro continua salvo no Firestore e pode receber a foto depois.
   const file=document.getElementById('cphoto')?.files?.[0];
+  let photo=DEFAULT_CAR_PHOTO;
   if(file){
-    try{
-      const ext=(file.name.split('.').pop()||'png').toLowerCase();
-      const allowed=['png','jpg','jpeg','webp','gif'];
-      if(!allowed.includes(ext) && !String(file.type||'').startsWith('image/')){
-        throw new Error('FORMATO_INVALIDO');
-      }
-      const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-      const contentType=file.type || (ext==='png'?'image/png':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/jpeg');
-      const ref=storage.ref(`carros/${id}/${Date.now()}-${safeName}`);
-      await ref.put(file,{contentType,cacheControl:'public,max-age=31536000'});
-      carObj.photo=await ref.getDownloadURL();
-      carObj.photoName=safeName;
-      carObj.photoType=contentType;
-      await save();
-    }catch(e){
-      console.error('Erro ao enviar foto:',e);
-      const code=e?.code||'';
-      if(e?.message==='FORMATO_INVALIDO') alert('O arquivo precisa ser uma imagem PNG, JPG, JPEG, WEBP ou GIF.');
-      else if(code==='storage/unauthorized') alert('A foto foi recusada pelo Firebase Storage. É necessário ajustar as regras do Storage para permitir o envio.');
-      else if(code==='storage/canceled') alert('O envio da foto foi cancelado.');
-      else if(code==='storage/quota-exceeded') alert('O armazenamento do Firebase atingiu a cota.');
-      else alert('Não foi possível enviar a foto PNG ao Firebase Storage. Código: '+(code||'erro desconhecido'));
+    try{ photo=await prepareCarPhoto(file); }
+    catch(e){
+      if(e.message==='TAMANHO_INVALIDO')return alert('Escolha uma foto de até 10 MB.');
+      if(e.message==='FORMATO_INVALIDO')return alert('Escolha uma imagem PNG, JPG, JPEG, WEBP ou GIF.');
+      if(e.message==='IMAGEM_GRANDE')return alert('Essa imagem é muito grande para o banco. Escolha uma foto menor.');
+      return alert('Não foi possível preparar a foto. Tente outra imagem.');
     }
   }
 
-  adminTab('cars');
-  render();
+  const id=uuid();
+  const carObj={id,model,plate,seats,number:n,photo,photoName:file?.name||'',photoType:'image/jpeg'};
+  data.cars.push(carObj);
+  try{
+    await save();
+    adminTab('cars');
+    render();
+  }catch(e){
+    data.cars=data.cars.filter(c=>c.id!==id);
+    console.error('Erro ao salvar carro:',e);
+    alert('Não foi possível salvar o carro no Firebase. Verifique as regras do Firestore.');
+  }
 }
 function editCar(id){
   const c=car(id);if(!c)return;
@@ -710,7 +720,7 @@ function editCar(id){
     <div class="field"><label>Placa</label><input id="ecp" value="${esc(c.plate)}"></div>
     <div class="field"><label>Lugares</label><select id="ecs"><option value="2" ${c.seats==2?'selected':''}>2 lugares</option><option value="4" ${c.seats==4?'selected':''}>4 lugares</option><option value="5" ${c.seats==5?'selected':''}>5 lugares</option><option value="7" ${c.seats==7?'selected':''}>7 lugares</option></select></div>
     <div class="field"><label>Nº frota</label><input id="ecn" type="number" min="1" max="99" value="${c.number}"></div>
-    <div class="field wide"><label>Foto do carro</label><input id="ecPhoto" type="file" accept="image/*" onchange="previewEditPhoto(this)"><div class="photo-field" style="margin-top:7px"><img id="ecPreview" class="photo-preview" src="${photo}"><span class="photo-note">Escolha outra foto para substituir a atual.</span></div></div>
+    <div class="field wide"><label>Foto do carro</label><input id="ecPhoto" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif" onchange="previewEditPhoto(this)"><div class="photo-field" style="margin-top:7px"><img id="ecPreview" class="photo-preview" src="${photo}"><span class="photo-note">Escolha outra foto para substituir a atual.</span></div></div>
   </div>`,`<button class="btn dark" onclick="closeModal()">CANCELAR</button><button class="btn primary" onclick="saveCarEdit('${id}')">SALVAR</button>`);
 }
 function previewEditPhoto(input){
@@ -723,24 +733,25 @@ async function saveCarEdit(id){
   const n=Number(ecn.value);
   if(!ecm.value.trim()||!ecp.value.trim())return alert('Preencha nome e placa.');
   if(!Number.isInteger(n)||n<1||n>99)return alert('Número de frota inválido.');
-  if(data.cars.some(x=>x.id!==id&&x.number===n))return alert('Esse número de frota já está em uso.');
+  if(data.cars.some(x=>x.id!==id&&Number(x.number)===n))return alert('Esse número de frota já está em uso.');
+  const old={...c};
   c.model=ecm.value.trim();c.plate=ecp.value.trim().toUpperCase();c.seats=Number(ecs.value);c.number=n;
   const file=document.getElementById('ecPhoto')?.files?.[0];
   if(file){
     try{
-      const ext=(file.name.split('.').pop()||'png').toLowerCase();
-      const contentType=file.type || (ext==='png'?'image/png':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/jpeg');
-      const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-      const ref=storage.ref(`carros/${id}/${Date.now()}-${safeName}`);
-      await ref.put(file,{contentType,cacheControl:'public,max-age=31536000'});
-      c.photo=await ref.getDownloadURL();
-      c.photoName=safeName; c.photoType=contentType;
+      c.photo=await prepareCarPhoto(file);
+      c.photoName=file.name;
+      c.photoType='image/jpeg';
     }catch(e){
-      console.error('Erro ao substituir foto:',e);
-      return alert('Não foi possível enviar a nova foto ao Firebase Storage. Código: '+(e?.code||'erro desconhecido'));
+      Object.assign(c,old);
+      if(e.message==='TAMANHO_INVALIDO')return alert('Escolha uma foto de até 10 MB.');
+      if(e.message==='FORMATO_INVALIDO')return alert('Escolha uma imagem PNG, JPG, JPEG, WEBP ou GIF.');
+      if(e.message==='IMAGEM_GRANDE')return alert('Essa imagem é muito grande para o banco. Escolha uma foto menor.');
+      return alert('Não foi possível preparar a nova foto.');
     }
   }
-  await save();closeModal();adminTab('cars');render();
+  try{await save();closeModal();adminTab('cars');render()}
+  catch(e){Object.assign(c,old);console.error(e);alert('Não foi possível salvar as alterações no Firebase.')}
 }
 async function removeCar(id){
   if(data.bookings.some(b=>b.carId===id&&b.status!=='DEVOLVIDO'))return alert('Esse carro possui agendamento pendente ou está em uso.');
