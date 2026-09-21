@@ -1,4 +1,4 @@
-import { loadFleetData, saveFleetData, uploadCarImage, prepareCarImage } from "./firebase.js";
+import { loadFleetData, saveFleetData, subscribeFleetData, prepareCarImage } from "./firebase.js";
 
 
 const KEY='frota_carros_v1', ADMIN='johnfranca321'; window.adminMode=false;
@@ -6,16 +6,72 @@ function uuid(){return (window.crypto&&crypto.randomUUID)?crypto.randomUUID():'x
 const DEFAULT_CAR_PHOTO = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450"><rect width="800" height="450" fill="#eef2f7"/><path d="M180 285l45-95h320l75 95v55H180z" fill="#d8dee8"/><circle cx="275" cy="345" r="38" fill="#64748b"/><circle cx="525" cy="345" r="38" fill="#64748b"/><text x="400" y="150" text-anchor="middle" font-family="Arial" font-size="32" fill="#334155">CONTROLE DE FROTA</text></svg>`);
 let data={cars:[],employees:[],bookings:[],history:[]};
 let firebaseReady=false;
-const LOCAL_KEY='controle_frota_backup_v2';
+let firebaseSyncUnsubscribe=null;
 const $=id=>document.getElementById(id);
 const dom=new Proxy({}, {get:(_,id)=>$(id)});
-function saveLocal(){ try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({version:2, updatedAt:Date.now(), data})); }catch(e){ console.warn('Backup local indisponível',e); } }
-function loadLocal(){ try{ const raw=JSON.parse(localStorage.getItem(LOCAL_KEY)||'null'); if(raw&&raw.data) return {data:raw.data,updatedAt:Number(raw.updatedAt||0)}; if(raw&&raw.cars) return {data:raw,updatedAt:0}; return null; }catch(e){ return null; } }
-let viewDate=new Date();viewDate.setDate(1);
+
+// O Firestore é a única fonte de dados. Não usamos localStorage para
+// evitar que dados antigos deste aparelho voltem depois de uma exclusão.
 async function save(){
-  saveLocal();
-  try { await saveFleetData(data); firebaseReady=true; return true; }
-  catch(error){ console.error('Firebase: falha ao salvar', error); firebaseReady=false; alert('Os dados foram salvos neste aparelho, mas o Firebase não aceitou a gravação. Publique as regras do Firestore e tente novamente.'); return false; }
+  try{
+    await saveFleetData(data);
+    firebaseReady=true;
+    showSyncStatus('SALVO NO FIREBASE',true);
+    return true;
+  }catch(error){
+    firebaseReady=false;
+    console.error('Firestore: falha ao salvar',error);
+    showSyncStatus('FALHA AO SALVAR NO FIREBASE',false);
+    return false;
+  }
+}
+function showSyncStatus(message,ok=true){
+  let el=document.getElementById('firebaseSyncStatus');
+  if(!el){
+    el=document.createElement('div');
+    el.id='firebaseSyncStatus';
+    el.style.cssText='position:fixed;right:16px;bottom:16px;z-index:99999;padding:10px 14px;border-radius:10px;background:#0f172a;color:#fff;font:600 12px Arial;box-shadow:0 8px 30px rgba(0,0,0,.18);opacity:0;transition:opacity .2s';
+    document.body.appendChild(el);
+  }
+  el.textContent=message;
+  el.style.background=ok?'#166534':'#b91c1c';
+  el.style.opacity='1';
+  clearTimeout(el._timer);
+  el._timer=setTimeout(()=>el.style.opacity='0',2200);
+}
+
+let viewDate=new Date();viewDate.setDate(1);
+function setDbStatus(ok){
+  let el=document.getElementById('dbStatus');
+  if(!el){ el=document.createElement('div'); el.id='dbStatus'; el.className='db-status'; document.body.appendChild(el); }
+  el.textContent=ok?'● BANCO CONECTADO':'● BANCO OFFLINE';
+  el.classList.toggle('offline',!ok);
+}
+async function save(){
+  try {
+    await saveFleetData(data);
+    firebaseReady=true;
+    setDbStatus(true);
+    return true;
+  } catch(error){
+    console.error('Firebase: falha ao salvar', error);
+    firebaseReady=false;
+    setDbStatus(false);
+    // O Firestore é a fonte oficial dos dados. Se a gravação falhar,
+    // não mostramos uma mensagem bloqueando a tela nem fingimos que salvou.
+    try{
+      const remote=await loadFleetData();
+      data={
+        cars:Array.isArray(remote.cars)?remote.cars:[],
+        employees:Array.isArray(remote.employees)?remote.employees:[],
+        bookings:Array.isArray(remote.bookings)?remote.bookings:[],
+        history:Array.isArray(remote.history)?remote.history:[]
+      };
+    }catch(reloadError){
+      console.error('Não foi possível recarregar o Firestore:', reloadError);
+    }
+    return false;
+  }
 }
 function esc(s=''){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
 function dt(v){if(!v)return '—';let d=new Date(v);return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}
@@ -332,7 +388,7 @@ async function addCar(){
   const id=uuid();
   let photo=DEFAULT_CAR_PHOTO;
   const file=document.getElementById('cphoto')?.files?.[0];
-  if(file){ try{ photo=await uploadCarImage(file,id); }catch(error){ console.warn('Storage indisponível; usando foto comprimida no registro.',error); try{ photo=await prepareCarImage(file); }catch(e){ console.warn(e); } } }
+  if(file){ try{ photo=await prepareCarImage(file); }catch(error){ alert(error.message||'Não foi possível preparar a foto.'); return; } }
   data.cars.push({id,model,plate,seats:Number($('cs').value),number:n,photo});
   await save();adminTab('cars');render();
 }
@@ -360,7 +416,7 @@ async function saveCarEdit(id){
   if(data.cars.some(x=>x.id!==id&&x.number===n))return alert('Esse número de frota já está em uso.');
   c.model=$('ecm').value.trim();c.plate=$('ecp').value.trim().toUpperCase();c.seats=Number($('ecs').value);c.number=n;c.photo=c.photo||DEFAULT_CAR_PHOTO;
   const file=document.getElementById('ecPhoto')?.files?.[0];
-  if(file){ try{ c.photo=await uploadCarImage(file,id); }catch(error){ console.warn('Storage indisponível; usando foto comprimida no registro.',error); try{ c.photo=await prepareCarImage(file); }catch(e){ console.warn(e); } } }
+  if(file){ try{ c.photo=await prepareCarImage(file); }catch(error){ alert(error.message||'Não foi possível preparar a foto.'); return; } }
   await save();closeModal();adminTab('cars');render();
 }
 async function removeCar(id){if(data.bookings.some(b=>b.carId===id&&b.status!=='DEVOLVIDO'))return alert('Esse carro possui agendamento pendente ou está em uso.');if(confirm('Excluir este carro?')){data.cars=data.cars.filter(c=>c.id!==id);await save();adminTab('cars');render()}}
@@ -412,41 +468,47 @@ Object.assign(window, {
 });
 async function initApp(){
   try{
-    let remote=null;
-    let remoteLoaded=false;
-    try{ remote=await loadFleetData(); remoteLoaded=true; firebaseReady=true; }
-    catch(error){ console.warn('Firebase indisponível; usando backup local.',error); firebaseReady=false; }
+    // Primeira leitura: tudo vem do Firestore.
+    const remote=await loadFleetData();
+    data={
+      cars:Array.isArray(remote.cars)?remote.cars:[],
+      employees:Array.isArray(remote.employees)?remote.employees:[],
+      bookings:Array.isArray(remote.bookings)?remote.bookings:[],
+      history:Array.isArray(remote.history)?remote.history:[]
+    };
+    firebaseReady=true;
 
-    const local=loadLocal();
-    if(remoteLoaded && remote && typeof remote==='object'){
-      const remoteUpdated=Number(remote._meta?.clientUpdatedAt||0);
-      const localUpdated=Number(local?.updatedAt||0);
-      if(local && localUpdated>remoteUpdated){
-        // Houve uma alteração local mais recente, inclusive exclusões feitas
-        // enquanto uma gravação anterior do Firestore estava falhando.
-        data=local.data;
-        await save();
-      }else{
-        data={cars:Array.isArray(remote.cars)?remote.cars:[],employees:Array.isArray(remote.employees)?remote.employees:[],bookings:Array.isArray(remote.bookings)?remote.bookings:[],history:Array.isArray(remote.history)?remote.history:[]};
-        saveLocal();
-      }
-    }else if(local){
-      data=local.data;
-    }
-
+    // Banco vazio: cria somente os dois veículos iniciais e já grava na nuvem.
     if(!data.cars.length){
-      data.cars=[{id:uuid(),model:'ESTRADA',seats:2,plate:'A DEFINIR',number:1,photo:DEFAULT_CAR_PHOTO},{id:uuid(),model:'FIAT STRADA',seats:2,plate:'A DEFINIR',number:2,photo:DEFAULT_CAR_PHOTO}];
+      data.cars=[
+        {id:uuid(),model:'ESTRADA',seats:2,plate:'A DEFINIR',number:1,photo:DEFAULT_CAR_PHOTO},
+        {id:uuid(),model:'FIAT STRADA',seats:2,plate:'A DEFINIR',number:2,photo:DEFAULT_CAR_PHOTO}
+      ];
       await save();
     }
+
     data.cars=data.cars.map((c,i)=>({...c,number:c.number||i+1,photo:c.photo||DEFAULT_CAR_PHOTO}));
-    saveLocal();
     render();
+
+    // Mantém todos os aparelhos sincronizados em tempo real.
+    firebaseSyncUnsubscribe=await subscribeFleetData(remoteData=>{
+      data={
+        cars:Array.isArray(remoteData.cars)?remoteData.cars:[],
+        employees:Array.isArray(remoteData.employees)?remoteData.employees:[],
+        bookings:Array.isArray(remoteData.bookings)?remoteData.bookings:[],
+        history:Array.isArray(remoteData.history)?remoteData.history:[]
+      };
+      firebaseReady=true;
+      render();
+    });
+    showSyncStatus('CONECTADO AO FIREBASE',true);
   }catch(error){
-    console.error('Falha ao iniciar o sistema',error);
-    const local=loadLocal();
-    if(local) data=local.data;
+    console.error('Falha ao conectar ao Firestore',error);
+    firebaseReady=false;
+    showSyncStatus('NÃO FOI POSSÍVEL CONECTAR AO FIREBASE',false);
     render();
   }
 }
+
 initApp();
 

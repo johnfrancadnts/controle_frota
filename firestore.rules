@@ -1,10 +1,12 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /frota/{collection}/items/{document} {
+    // Sistema interno de controle de frota.
+    // O acesso é intencionalmente simples, sem Firebase Authentication.
+    match /frota/{collectionName}/{documentName} {
       allow read, write: if true;
     }
-    match /frota/_meta {
+    match /frota/{collectionName}/items/{documentName} {
       allow read, write: if true;
     }
   }
