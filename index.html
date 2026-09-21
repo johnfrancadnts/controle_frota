@@ -451,8 +451,11 @@ function renderCalendar(){
   for(let i=0;i<first;i++)h+='<div class="day muted"></div>';
   for(let d=1;d<=days;d++){
     const key=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`, today=new Date().toISOString().slice(0,10)===key;
-    const bs=data.bookings.filter(b=>(!selectedCarId||b.carId===selectedCarId)&&b.start.slice(0,10)<=key&&b.end.slice(0,10)>=key).sort((a,b)=>new Date(a.start)-new Date(b.start));
-    h+=`<div class="day ${today?'today':''}"><div class="num">${d}</div>${bs.map(b=>{let c=car(b.carId),s=new Date(b.start),e=new Date(b.end),start=s.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),end=e.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});const cls=b.status==='DEVOLVIDO'?'done':(b.status==='EM USO'||b.status==='RETIRADO')?'inuse':(b.status==='PENDENTE'?'pending':'scheduled');const statusLabel=b.status==='DEVOLVIDO'?'ENTREGUE':(b.status==='EM USO'||b.status==='RETIRADO')?'EM USO':(b.status==='PENDENTE'?'AGUARDANDO APROVAÇÃO':'AGENDADO');const who=b.actualPickupId?` · ${esc(emp(b.actualPickupId)?.name||'')}`:'';return `<div class="event ${cls}" onclick="showBooking('${b.id}')" title="${esc(c?.model||'')}"><div class="eventtext"><div class="time">${start} até ${end}</div><div class="label"><b>${String(c?.number||'').padStart(2,'0')}</b> - ${esc(c?.model||'').toUpperCase()}</div><span class="event-status ${cls}">${statusLabel}${who}</span></div></div>`}).join('')}</div>`;
+    // Cada agendamento aparece SOMENTE no dia da retirada. A data de devolução
+    // continua registrada no agendamento e é mostrada dentro do evento, evitando
+    // que uma única solicitação apareça duplicada em dois dias do calendário.
+    const bs=data.bookings.filter(b=>(!selectedCarId||b.carId===selectedCarId)&&b.start.slice(0,10)===key).sort((a,b)=>new Date(a.start)-new Date(b.start));
+    h+=`<div class="day ${today?'today':''}"><div class="num">${d}</div>${bs.map(b=>{let c=car(b.carId),s=new Date(b.start),e=new Date(b.end),start=s.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),end=e.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),returnDate=e.toLocaleDateString('pt-BR'),returnTime=e.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});const cls=b.status==='DEVOLVIDO'?'done':(b.status==='EM USO'||b.status==='RETIRADO')?'inuse':(b.status==='PENDENTE'?'pending':'scheduled');const statusLabel=b.status==='DEVOLVIDO'?'ENTREGUE':(b.status==='EM USO'||b.status==='RETIRADO')?'EM USO':(b.status==='PENDENTE'?'AGUARDANDO APROVAÇÃO':'AGENDADO');const who=b.actualPickupId?` · ${esc(emp(b.actualPickupId)?.name||'')}`:'';const returnInfo=returnDate===s.toLocaleDateString('pt-BR')?`devolução ${end}`:`devolução ${returnDate} ${returnTime}`;return `<div class="event ${cls}" onclick="showBooking('${b.id}')" title="${esc(c?.model||'')} | ${esc(returnInfo)}"><div class="eventtext"><div class="time">${start} • ${returnInfo}</div><div class="label"><b>${String(c?.number||'').padStart(2,'0')}</b> - ${esc(c?.model||'').toUpperCase()}</div><span class="event-status ${cls}">${statusLabel}${who}</span></div></div>`}).join('')}</div>`;
   } h+='</div>';calendar.innerHTML=h;
 }
 function openBooking(editId=''){
@@ -483,7 +486,7 @@ function saveBooking(id){
  }else{
    data.bookings.push({id:uuid(),...obj,status:'PENDENTE',createdAt:new Date().toISOString()});
  }
- save();closeModal();render();
+ save().then(()=>{closeModal();render()}).catch(err=>alert('Não foi possível salvar no Firebase. '+(err.code||err.message||'')));
 }
 function showBooking(id){
   const b=data.bookings.find(x=>x.id===id);if(!b)return;
@@ -512,7 +515,7 @@ function approveBooking(id){
   const conflict=data.bookings.some(x=>x.id!==id&&x.carId===b.carId&&x.status!=='DEVOLVIDO'&&new Date(b.start)<new Date(x.end)&&new Date(b.end)>new Date(x.start));
   if(conflict)return alert('Não foi possível autorizar: o carro já possui outro agendamento/uso nesse período.');
   b.status='AGENDADO';b.approvedAt=new Date().toISOString();
-  save();adminTab('approvals');render();
+  save().then(()=>{adminTab('approvals');render()}).catch(err=>alert('Não foi possível salvar no Firebase. '+(err.code||err.message||'')));
 }
 function rejectBooking(id){
   const b=data.bookings.find(x=>x.id===id);
@@ -520,18 +523,18 @@ function rejectBooking(id){
   if(!confirm('Recusar esta solicitação de agendamento?'))return;
   data.bookings=data.bookings.filter(x=>x.id!==id);
   data.history.push({...b,rejectedAt:new Date().toISOString(),status:'RECUSADO'});
-  save();adminTab('approvals');render();
+  save().then(()=>{adminTab('approvals');render()}).catch(err=>alert('Não foi possível salvar no Firebase. '+(err.code||err.message||'')));
 }
 function pickup(id){
  const b=data.bookings.find(x=>x.id===id),opts=data.employees.map(e=>`<option value="${e.id}" ${e.id===b.employeeId?'selected':''}>${esc(e.name)}</option>`).join('');
  openModal('Registrar retirada',`<div class="field"><label>Quem realmente pegou?</label><select id="pickEmp">${opts}</select></div>`,`<button class="btn dark" onclick="closeModal()">CANCELAR</button><button class="btn primary" onclick="confirmPickup('${id}')">CONFIRMAR</button>`);
 }
-function confirmPickup(id){let b=data.bookings.find(x=>x.id===id);b.actualPickupId=pickEmp.value;b.actualPickupAt=new Date().toISOString();b.status='EM USO';save();closeModal();render()}
+function confirmPickup(id){let b=data.bookings.find(x=>x.id===id);b.actualPickupId=pickEmp.value;b.actualPickupAt=new Date().toISOString();b.status='EM USO';save().then(()=>{closeModal();render()}).catch(err=>alert('Não foi possível salvar no Firebase. '+(err.code||err.message||'')))}
 function returnCar(id){
  const opts=data.employees.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('');
  openModal('Registrar devolução',`<div class="field"><label>Quem devolveu?</label><select id="returnEmp">${opts}</select></div>`,`<button class="btn dark" onclick="closeModal()">CANCELAR</button><button class="btn primary" onclick="confirmReturn('${id}')">CONFIRMAR</button>`);
 }
-function confirmReturn(id){let b=data.bookings.find(x=>x.id===id);b.actualReturnId=returnEmp.value;b.actualReturnAt=new Date().toISOString();b.status='DEVOLVIDO';save();closeModal();render()}
+function confirmReturn(id){let b=data.bookings.find(x=>x.id===id);b.actualReturnId=returnEmp.value;b.actualReturnAt=new Date().toISOString();b.status='DEVOLVIDO';save().then(()=>{closeModal();render()}).catch(err=>alert('Não foi possível salvar no Firebase. '+(err.code||err.message||'')))}
 function openAdmin(){
  openModal('Controle',`<div class="field"><label>Senha</label><input id="adminPass" type="password" placeholder="Senha administrativa"></div><div id="err" class="dangertext"></div>`,`<button class="btn dark" onclick="closeModal()">CANCELAR</button><button class="btn primary" onclick="checkAdmin()">ENTRAR</button>`);
 }
@@ -693,11 +696,28 @@ function prepareCarPhoto(file){
         const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
         const ctx=canvas.getContext('2d');
         ctx.drawImage(img,0,0,w,h);
-        // A imagem pode ser PNG/JPG normalmente no seletor; para o Firestore usamos
-        // uma cópia comprimida que cabe no documento e continua vinculada ao carro.
-        const out=canvas.toDataURL('image/jpeg',0.78);
+        // Mantém transparência: JPEG transforma áreas transparentes em preto.
+        // WebP preserva o canal alpha e ainda comprime bastante para caber no Firestore.
+        let out=canvas.toDataURL('image/webp',0.82);
+        let outType='image/webp';
+        // Fallback para PNG caso o navegador não suporte WebP no canvas.
+        if(!out.startsWith('data:image/webp')){
+          out=canvas.toDataURL('image/png');
+          outType='image/png';
+        }
+        if(out.length>900000){
+          // Reduz mais uma vez mantendo transparência.
+          const maxW2=700,maxH2=500;
+          const scale2=Math.min(1,maxW2/w,maxH2/h);
+          const w2=Math.max(1,Math.round(w*scale2)),h2=Math.max(1,Math.round(h*scale2));
+          const c2=document.createElement('canvas');c2.width=w2;c2.height=h2;
+          const x2=c2.getContext('2d');x2.drawImage(img,0,0,w2,h2);
+          out=c2.toDataURL('image/webp',0.78);
+          outType='image/webp';
+          if(!out.startsWith('data:image/webp'))out=c2.toDataURL('image/png'),outType='image/png';
+        }
         if(out.length>900000)return reject(new Error('IMAGEM_GRANDE'));
-        resolve(out);
+        resolve({data:out,type:outType});
       };
       img.onerror=()=>reject(new Error('IMAGEM_INVALIDA'));
       img.src=reader.result;
@@ -727,7 +747,7 @@ async function addCar(){
   const file=document.getElementById('cphoto')?.files?.[0];
   let photo=DEFAULT_CAR_PHOTO;
   if(file){
-    try{ photo=await prepareCarPhoto(file); }
+    try{ const prepared=await prepareCarPhoto(file); photo=prepared.data; }
     catch(e){
       if(e.message==='TAMANHO_INVALIDO')return alert('Escolha uma foto de até 10 MB.');
       if(e.message==='FORMATO_INVALIDO')return alert('Escolha uma imagem PNG, JPG, JPEG, WEBP ou GIF.');
@@ -737,7 +757,7 @@ async function addCar(){
   }
 
   const id=uuid();
-  const carObj={id,model,plate,seats,number:n,photo,photoName:file?.name||'',photoType:'image/jpeg'};
+  const carObj={id,model,plate,seats,number:n,photo,photoName:file?.name||'',photoType:(file?.type==='image/png'?'image/webp':'image/webp')};
   data.cars.push(carObj);
   try{
     await save();
@@ -776,9 +796,10 @@ async function saveCarEdit(id){
   const file=document.getElementById('ecPhoto')?.files?.[0];
   if(file){
     try{
-      c.photo=await prepareCarPhoto(file);
+      const prepared=await prepareCarPhoto(file);
+      c.photo=prepared.data;
       c.photoName=file.name;
-      c.photoType='image/jpeg';
+      c.photoType=prepared.type;
     }catch(e){
       Object.assign(c,old);
       if(e.message==='TAMANHO_INVALIDO')return alert('Escolha uma foto de até 10 MB.');
