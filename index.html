@@ -649,20 +649,45 @@ function previewCarPhoto(input){
   reader.readAsDataURL(file);
 }
 async function addCar(){
-  let model=cm.value.trim(),plate=cp.value.trim().toUpperCase(),n=Number(cn.value);
+  const model=(document.getElementById('cm')?.value||'').trim();
+  const plate=(document.getElementById('cp')?.value||'').trim().toUpperCase();
+  const n=Number(document.getElementById('cn')?.value);
+  const seats=Number(document.getElementById('cs')?.value||2);
   if(!model)return alert('Preencha o nome/modelo do carro.');
   if(!plate)return alert('Preencha a placa.');
-  if(n<1||n>99)return alert('Informe um número de frota válido.');
-  if(data.cars.some(c=>c.number===n))return alert('Esse número de frota já está em uso.');
+  if(!Number.isInteger(n)||n<1||n>99)return alert('Informe um número de frota válido.');
+  if(data.cars.some(c=>Number(c.number)===n))return alert('Esse número de frota já está em uso.');
+  if(!firebaseReady)return alert('O Firebase ainda não terminou de carregar. Aguarde um instante e tente novamente.');
+
   const id=uuid();
-  const file=document.getElementById('cphoto')?.files?.[0];
-  let photo='';
-  if(file){
-    try{ const ref=storage.ref(`carros/${id}-${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`); await ref.put(file); photo=await ref.getDownloadURL(); }
-    catch(e){ console.error(e); return alert('Não foi possível enviar a foto do carro ao Firebase.'); }
+  const carObj={id,model,plate,seats,number:n};
+  data.cars.push(carObj);
+  try{
+    await save();
+  }catch(e){
+    data.cars=data.cars.filter(c=>c.id!==id);
+    console.error('Erro ao salvar carro:',e);
+    return alert('Não foi possível salvar o carro no Firebase. Verifique as regras do Firestore.');
   }
-  data.cars.push({id,model,plate,seats:Number(cs.value),number:n,...(photo?{photo}: {})});
-  await save();adminTab('cars');render();
+
+  // A foto não pode impedir o cadastro do carro. Se o Storage estiver bloqueado,
+  // o carro continua salvo no Firestore e pode receber a foto depois.
+  const file=document.getElementById('cphoto')?.files?.[0];
+  if(file){
+    try{
+      const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+      const ref=storage.ref(`carros/${id}-${Date.now()}-${safeName}`);
+      await ref.put(file);
+      carObj.photo=await ref.getDownloadURL();
+      await save();
+    }catch(e){
+      console.error('Erro ao enviar foto:',e);
+      alert('O carro foi salvo, mas a foto não pôde ser enviada. Verifique as regras do Storage.');
+    }
+  }
+
+  adminTab('cars');
+  render();
 }
 function editCar(id){
   const c=car(id);if(!c)return;
@@ -694,9 +719,40 @@ async function saveCarEdit(id){
   }
   await save();closeModal();adminTab('cars');render();
 }
-function removeCar(id){if(data.bookings.some(b=>b.carId===id&&b.status!=='DEVOLVIDO'))return alert('Esse carro possui agendamento pendente ou está em uso.');if(confirm('Excluir este carro?')){data.cars=data.cars.filter(c=>c.id!==id);save();adminTab('cars');render()}}
-function addEmp(){let name=en.value.trim();if(!name)return alert('Digite o nome.');data.employees.push({id:uuid(),name});save();adminTab('emp');render()}
-function removeEmp(id){if(data.bookings.some(b=>b.employeeId===id||b.actualPickupId===id||b.actualReturnId===id))return alert('Esse funcionário possui registros vinculados.');if(confirm('Excluir este funcionário?')){data.employees=data.employees.filter(e=>e.id!==id);save();adminTab('emp');render()}}
+async function removeCar(id){
+  if(data.bookings.some(b=>b.carId===id&&b.status!=='DEVOLVIDO'))return alert('Esse carro possui agendamento pendente ou está em uso.');
+  if(!confirm('Excluir este carro?'))return;
+  const old=data.cars;
+  data.cars=data.cars.filter(c=>c.id!==id);
+  try{await save();adminTab('cars');render()}
+  catch(e){data.cars=old;console.error(e);alert('Não foi possível excluir o carro do Firebase.')}
+}
+
+async function addEmp(){
+  const input=document.getElementById('en');
+  const name=(input?.value||'').trim();
+  if(!name)return alert('Digite o nome.');
+  if(!firebaseReady)return alert('O Firebase ainda não terminou de carregar. Aguarde um instante e tente novamente.');
+  const employee={id:uuid(),name};
+  data.employees.push(employee);
+  try{
+    await save();
+    adminTab('emp');
+    render();
+  }catch(e){
+    data.employees=data.employees.filter(e=>e.id!==employee.id);
+    console.error('Erro ao salvar funcionário:',e);
+    alert('Não foi possível salvar o funcionário no Firebase. Verifique as regras do Firestore.');
+  }
+}
+async function removeEmp(id){
+  if(data.bookings.some(b=>b.employeeId===id||b.actualPickupId===id||b.actualReturnId===id))return alert('Esse funcionário possui registros vinculados.');
+  if(!confirm('Excluir este funcionário?'))return;
+  const old=data.employees;
+  data.employees=data.employees.filter(e=>e.id!==id);
+  try{await save();adminTab('emp');render()}
+  catch(e){data.employees=old;console.error(e);alert('Não foi possível excluir o funcionário do Firebase.')}
+}
 
 function generatePickupPDF(){
   const month = document.getElementById('pdfMonth')?.value || new Date().toISOString().slice(0,7);
