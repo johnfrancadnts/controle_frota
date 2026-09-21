@@ -496,7 +496,7 @@ function showBooking(id){
     actions+=`<div class="notice">Este agendamento está aguardando autorização do administrador na aba CONTROLES.</div>`;
   }
   if(b.status==='AGENDADO')actions+=`<button class="btn primary" onclick="pickup('${id}')">REGISTRAR RETIRADA</button>`;
-  if((b.status==='EM USO'||b.status==='RETIRADO') && window.adminMode)actions+=`<button class="btn primary" onclick="returnCar('${id}')">REGISTRAR DEVOLUÇÃO</button>`;
+  if((b.status==='EM USO'||b.status==='RETIRADO') && b.actualPickupId)actions+=`<button class="btn primary" onclick="returnCar('${id}')">DEVOLVER CARRO</button>`;
   if(window.adminMode && b.status!=='DEVOLVIDO')actions+=`<button class="btn dark" onclick="openBooking('${id}')">EDITAR</button>`;
   openModal('Agendamento',`<div class="carrow" style="margin-bottom:14px"><div><b>${String(c?.number||'').padStart(2,'0')} - ${esc(c?.model||'').toUpperCase()}</b><div class="tiny">${esc(c?.plate||'')}</div></div></div>
   <div class="form">
@@ -531,10 +531,54 @@ function pickup(id){
 }
 function confirmPickup(id){let b=data.bookings.find(x=>x.id===id);b.actualPickupId=pickEmp.value;b.actualPickupAt=new Date().toISOString();b.status='EM USO';save().then(()=>{closeModal();render()}).catch(err=>alert('Não foi possível salvar no Firebase. '+(err.code||err.message||'')))}
 function returnCar(id){
- const opts=data.employees.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('');
- openModal('Registrar devolução',`<div class="field"><label>Quem devolveu?</label><select id="returnEmp">${opts}</select></div>`,`<button class="btn dark" onclick="closeModal()">CANCELAR</button><button class="btn primary" onclick="confirmReturn('${id}')">CONFIRMAR</button>`);
+ const b=data.bookings.find(x=>x.id===id);
+ if(!b||!(b.status==='EM USO'||b.status==='RETIRADO'))return;
+ if(!b.actualPickupId)return alert('Este carro ainda não tem uma retirada registrada.');
+ const employee=emp(b.actualPickupId);
+ openModal('Registrar devolução',`<div class="notice"><b>${esc(employee?.name||'Funcionário')}</b>, para devolver o carro é obrigatório tirar uma foto do veículo no local da devolução.</div>
+   <div class="field" style="margin-top:12px"><label>Quem vai devolver</label><input disabled value="${esc(employee?.name||'—')}"></div>
+   <div class="field wide" style="margin-top:12px"><label>Foto do carro no momento da devolução</label><input id="returnPhoto" type="file" accept="image/*" capture="environment" onchange="previewReturnPhoto(this)"><div class="photo-field" style="margin-top:8px"><img id="returnPhotoPreview" class="photo-preview" alt="Foto da devolução" style="display:none"><span id="returnPhotoNote" class="photo-note">No celular, o botão abrirá a câmera. A foto é exigida para concluir a devolução.</span></div></div>`,`<button class="btn dark" onclick="closeModal()">CANCELAR</button><button class="btn primary" onclick="confirmReturn('${id}')">CONFIRMAR DEVOLUÇÃO</button>`);
 }
-function confirmReturn(id){let b=data.bookings.find(x=>x.id===id);b.actualReturnId=returnEmp.value;b.actualReturnAt=new Date().toISOString();b.status='DEVOLVIDO';save().then(()=>{closeModal();render()}).catch(err=>alert('Não foi possível salvar no Firebase. '+(err.code||err.message||'')))}
+function previewReturnPhoto(input){
+ const file=input.files?.[0]; if(!file)return;
+ if(!String(file.type||'').startsWith('image/')){alert('Escolha uma foto válida.');input.value='';return;}
+ if(file.size>10*1024*1024){alert('A foto deve ter até 10 MB.');input.value='';return;}
+ const reader=new FileReader();
+ reader.onload=()=>{const img=document.getElementById('returnPhotoPreview');const note=document.getElementById('returnPhotoNote');if(img){img.src=reader.result;img.style.display='block'}if(note)note.textContent='Foto pronta para salvar.'};
+ reader.readAsDataURL(file);
+}
+function prepareReturnPhoto(file){
+ return new Promise((resolve,reject)=>{
+   if(!file)return reject(new Error('FOTO_OBRIGATORIA'));
+   if(!String(file.type||'').startsWith('image/'))return reject(new Error('FORMATO_INVALIDO'));
+   if(file.size>10*1024*1024)return reject(new Error('TAMANHO_INVALIDO'));
+   const reader=new FileReader(); reader.onerror=()=>reject(new Error('LEITURA_INVALIDA'));
+   reader.onload=()=>{const img=new Image();img.onload=()=>{
+     const maxW=900,maxH=650,scale=Math.min(1,maxW/img.width,maxH/img.height),w=Math.max(1,Math.round(img.width*scale)),h=Math.max(1,Math.round(img.height*scale));
+     const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,w,h);
+     let out=canvas.toDataURL('image/webp',0.68); if(!out.startsWith('data:image/webp'))out=canvas.toDataURL('image/jpeg',0.68);
+     if(out.length>700000){const c2=document.createElement('canvas');c2.width=650;c2.height=Math.max(1,Math.round(h*650/w));const x=c2.getContext('2d');x.drawImage(img,0,0,c2.width,c2.height);out=c2.toDataURL('image/webp',0.6);if(!out.startsWith('data:image/webp'))out=c2.toDataURL('image/jpeg',0.6)}
+     if(out.length>850000)return reject(new Error('IMAGEM_GRANDE')); resolve({data:out,name:file.name});
+   };img.onerror=()=>reject(new Error('IMAGEM_INVALIDA'));img.src=reader.result};reader.readAsDataURL(file);
+ });
+}
+async function confirmReturn(id){
+ const b=data.bookings.find(x=>x.id===id); if(!b)return;
+ if(!(b.status==='EM USO'||b.status==='RETIRADO'))return alert('Este agendamento não está em uso.');
+ if(!b.actualPickupId)return alert('Não há funcionário registrado como responsável pela retirada.');
+ const file=document.getElementById('returnPhoto')?.files?.[0];
+ if(!file)return alert('Tire uma foto do carro no local da devolução para concluir.');
+ const old={...b};
+ try{
+   const prepared=await prepareReturnPhoto(file);
+   b.actualReturnId=b.actualPickupId;
+   b.actualReturnAt=new Date().toISOString();
+   b.returnPhoto=prepared.data;
+   b.returnPhotoName=prepared.name||'';
+   b.status='DEVOLVIDO';
+   await save(); closeModal(); render();
+ }catch(err){Object.assign(b,old);console.error(err);const msg=err.message==='IMAGEM_GRANDE'?'A foto ficou grande demais para o banco. Tire uma foto menor.':err.message==='FORMATO_INVALIDO'?'Escolha uma imagem válida.':'Não foi possível salvar a foto da devolução.';alert(msg)}
+}
 function openAdmin(){
  openModal('Controle',`<div class="field"><label>Senha</label><input id="adminPass" type="password" placeholder="Senha administrativa"></div><div id="err" class="dangertext"></div>`,`<button class="btn dark" onclick="closeModal()">CANCELAR</button><button class="btn primary" onclick="checkAdmin()">ENTRAR</button>`);
 }
@@ -562,7 +606,7 @@ function adminTab(t){
     adminContent.innerHTML=`<div class="admin-titleline">
       <div>
         <div class="admin-section-title">Aprovação de agendamentos</div>
-        <div class="admin-help">Todo pedido novo fica pendente até o administrador autorizar. A retirada pode ser feita pelo funcionário; a devolução só pode ser registrada aqui.</div>
+        <div class="admin-help">Todo pedido novo fica pendente até o administrador autorizar. A retirada e a devolução podem ser feitas pelo funcionário que pegou o carro; a devolução exige foto do veículo no local.</div>
       </div>
     </div>
     <section class="admin-panel">
@@ -587,7 +631,7 @@ function adminTab(t){
         <td>${dt(b.end)}</td>
         <td>${badge(b.status)}</td>
         <td>${esc(emp(b.actualPickupId)?.name||'Ainda não retirado')}</td>
-        <td>${(b.status==='EM USO'||b.status==='RETIRADO')?`<button class="btn primary" onclick="returnCar('${b.id}')">REGISTRAR DEVOLUÇÃO</button>`:'<span class="tiny">Aguardando retirada</span>'}</td>
+        <td>${(b.status==='EM USO'||b.status==='RETIRADO')?`<button class="btn primary" onclick="returnCar('${b.id}')">DEVOLVER CARRO</button>`:'<span class="tiny">Aguardando retirada</span>'}</td>
       </tr>`).join('')||'<tr><td colspan="7"><div class="empty">Nenhum agendamento autorizado em andamento.</div></td></tr>'}</tbody></table></div>
     </section>`;
   }
@@ -659,10 +703,11 @@ function adminTab(t){
         <div class="actions">
           <div class="field" style="min-width:160px"><label>Mês do PDF</label><input id="pdfMonth" type="month" value="${new Date().toISOString().slice(0,7)}"></div>
           <button class="btn primary" onclick="generatePickupPDF()">GERAR PDF</button>
+          <button class="btn dark" onclick="deleteReturnPhotos()">APAGAR FOTOS DE DEVOLUÇÃO</button>
           <button class="btn danger" onclick="clearCompleted()">LIMPAR REGISTROS</button>
         </div>
       </div>
-      <div class="table-scroll"><table class="simple-table"><thead><tr><th>VEÍCULO</th><th>PLACA</th><th>QUEM PEGOU</th><th>RETIRADA / PREVISÃO</th><th>STATUS</th><th>QUEM DEVOLVEU</th><th>TEMPO</th></tr></thead>
+      <div class="table-scroll"><table class="simple-table"><thead><tr><th>VEÍCULO</th><th>PLACA</th><th>QUEM PEGOU</th><th>RETIRADA / PREVISÃO</th><th>STATUS</th><th>QUEM DEVOLVEU</th><th>FOTO</th><th>TEMPO</th></tr></thead>
       <tbody>${data.bookings.map(b=>`<tr>
         <td>${esc(car(b.carId)?.model||'Carro removido')} (${car(b.carId)?.seats||''} lugares)</td>
         <td>${esc(car(b.carId)?.plate||'—')}</td>
@@ -670,8 +715,9 @@ function adminTab(t){
         <td>${dt(b.actualPickupAt||b.start)}</td>
         <td>${badge(b.status)}</td>
         <td>${b.actualReturnId?`${esc(emp(b.actualReturnId)?.name||'—')}<div class="tiny">${dt(b.actualReturnAt)}</div>`:'Ainda não devolvido'}</td>
+        <td>${b.returnPhoto?'<span class="tiny">FOTO SALVA</span>':'<span class="tiny">—</span>'}</td>
         <td>${esc(b.actualPickupAt?durationStr(new Date(b.actualReturnAt||new Date())-new Date(b.actualPickupAt)):'—')}</td>
-      </tr>`).join('')||'<tr><td colspan="7"><div class="empty">Sem registros.</div></td></tr>'}</tbody></table></div>
+      </tr>`).join('')||'<tr><td colspan="8"><div class="empty">Sem registros.</div></td></tr>'}</tbody></table></div>
     </section>`;
   }
 }
@@ -882,6 +928,16 @@ function generatePickupPDF(){
 
   closeModal();
   setTimeout(()=>window.print(),80);
+}
+async function deleteReturnPhotos(){
+ const count=data.bookings.filter(b=>b.returnPhoto).length+data.history.filter(h=>h.returnPhoto).length;
+ if(!count)return alert('Não há fotos de devolução para apagar.');
+ if(!confirm(`Apagar ${count} foto(s) de devolução? O histórico, nomes, datas e demais dados permanecerão intactos.`))return;
+ const oldBookings=data.bookings.map(b=>({...b}));
+ const oldHistory=data.history.map(h=>({...h}));
+ data.bookings.forEach(b=>{delete b.returnPhoto;delete b.returnPhotoName});
+ data.history.forEach(h=>{delete h.returnPhoto;delete h.returnPhotoName});
+ try{await save();adminTab('hist');render();alert('Fotos de devolução apagadas. O histórico foi mantido.')}catch(e){data.bookings=oldBookings;data.history=oldHistory;console.error(e);alert('Não foi possível apagar as fotos no Firebase. '+(e.code||e.message||''))}
 }
 function clearCompleted(){const completed=data.bookings.filter(b=>b.status==='DEVOLVIDO');if(!completed.length)return alert('Nenhum veículo entregue para limpar.');if(confirm(`Arquivar ${completed.length} registro(s) já entregues? Agendamentos e veículos em uso permanecerão no gerenciamento.`)){data.history.push(...completed.map(b=>({...b,archivedAt:new Date().toISOString()})));data.bookings=data.bookings.filter(b=>b.status!=='DEVOLVIDO');save();adminTab('hist');render()}}
 loadData();
