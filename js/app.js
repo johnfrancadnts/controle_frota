@@ -9,13 +9,13 @@ let firebaseReady=false;
 const LOCAL_KEY='controle_frota_backup_v2';
 const $=id=>document.getElementById(id);
 const dom=new Proxy({}, {get:(_,id)=>$(id)});
-function saveLocal(){ try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(data)); }catch(e){ console.warn('Backup local indisponível',e); } }
-function loadLocal(){ try{ const x=JSON.parse(localStorage.getItem(LOCAL_KEY)||'null'); return x&&typeof x==='object'?x:null; }catch(e){ return null; } }
+function saveLocal(){ try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({version:2, updatedAt:Date.now(), data})); }catch(e){ console.warn('Backup local indisponível',e); } }
+function loadLocal(){ try{ const raw=JSON.parse(localStorage.getItem(LOCAL_KEY)||'null'); if(raw&&raw.data) return {data:raw.data,updatedAt:Number(raw.updatedAt||0)}; if(raw&&raw.cars) return {data:raw,updatedAt:0}; return null; }catch(e){ return null; } }
 let viewDate=new Date();viewDate.setDate(1);
 async function save(){
   saveLocal();
   try { await saveFleetData(data); firebaseReady=true; return true; }
-  catch(error){ console.error('Firebase: falha ao salvar', error); firebaseReady=false; return false; }
+  catch(error){ console.error('Firebase: falha ao salvar', error); firebaseReady=false; alert('Os dados foram salvos neste aparelho, mas o Firebase não aceitou a gravação. Publique as regras do Firestore e tente novamente.'); return false; }
 }
 function esc(s=''){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
 function dt(v){if(!v)return '—';let d=new Date(v);return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}
@@ -413,24 +413,38 @@ Object.assign(window, {
 async function initApp(){
   try{
     let remote=null;
-    try{ remote=await loadFleetData(); firebaseReady=true; }catch(error){ console.warn('Firebase indisponível; usando backup local.',error); }
-    if(remote && typeof remote==='object'){
-      data={cars:Array.isArray(remote.cars)?remote.cars:[],employees:Array.isArray(remote.employees)?remote.employees:[],bookings:Array.isArray(remote.bookings)?remote.bookings:[],history:Array.isArray(remote.history)?remote.history:[]};
-      saveLocal();
-    }else{
-      const local=loadLocal();
-      if(local) data={cars:Array.isArray(local.cars)?local.cars:[],employees:Array.isArray(local.employees)?local.employees:[],bookings:Array.isArray(local.bookings)?local.bookings:[],history:Array.isArray(local.history)?local.history:[]};
+    let remoteLoaded=false;
+    try{ remote=await loadFleetData(); remoteLoaded=true; firebaseReady=true; }
+    catch(error){ console.warn('Firebase indisponível; usando backup local.',error); firebaseReady=false; }
+
+    const local=loadLocal();
+    if(remoteLoaded && remote && typeof remote==='object'){
+      const remoteUpdated=Number(remote._meta?.clientUpdatedAt||0);
+      const localUpdated=Number(local?.updatedAt||0);
+      if(local && localUpdated>remoteUpdated){
+        // Houve uma alteração local mais recente, inclusive exclusões feitas
+        // enquanto uma gravação anterior do Firestore estava falhando.
+        data=local.data;
+        await save();
+      }else{
+        data={cars:Array.isArray(remote.cars)?remote.cars:[],employees:Array.isArray(remote.employees)?remote.employees:[],bookings:Array.isArray(remote.bookings)?remote.bookings:[],history:Array.isArray(remote.history)?remote.history:[]};
+        saveLocal();
+      }
+    }else if(local){
+      data=local.data;
     }
+
     if(!data.cars.length){
       data.cars=[{id:uuid(),model:'ESTRADA',seats:2,plate:'A DEFINIR',number:1,photo:DEFAULT_CAR_PHOTO},{id:uuid(),model:'FIAT STRADA',seats:2,plate:'A DEFINIR',number:2,photo:DEFAULT_CAR_PHOTO}];
       await save();
     }
     data.cars=data.cars.map((c,i)=>({...c,number:c.number||i+1,photo:c.photo||DEFAULT_CAR_PHOTO}));
+    saveLocal();
     render();
   }catch(error){
     console.error('Falha ao iniciar o sistema',error);
     const local=loadLocal();
-    if(local) data=local;
+    if(local) data=local.data;
     render();
   }
 }

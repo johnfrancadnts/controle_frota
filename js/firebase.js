@@ -32,6 +32,11 @@ export async function loadFleetData(){
   snapshots.forEach((snap,index)=>{
     result[COLLECTIONS[index]] = snap.docs.map(item => ({id:item.id, ...item.data()}));
   });
+  try{
+    const metaSnap = await s.getDocs(collectionPath(s,'_meta'));
+    const metaDoc = metaSnap.docs.find(d=>d.id==='state');
+    result._meta = metaDoc ? metaDoc.data() : {};
+  }catch(e){ result._meta = {}; }
   return result;
 }
 
@@ -59,9 +64,9 @@ export function saveFleetData(data){
   saveQueue = saveQueue.then(async()=>{
     const s = await services();
     for(const name of COLLECTIONS) await replaceCollection(s,name,Array.isArray(clean[name]) ? clean[name] : []);
-    const meta = s.doc(s.db, ROOT, "_meta");
+    const meta = s.doc(s.db, ROOT, "_meta", "state");
     const batch = s.writeBatch(s.db);
-    batch.set(meta,{updatedAt:s.serverTimestamp()});
+    batch.set(meta,{updatedAt:s.serverTimestamp(),clientUpdatedAt:Date.now()});
     await batch.commit();
   });
   return saveQueue;
