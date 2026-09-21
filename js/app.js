@@ -99,7 +99,7 @@ function openBooking(editId=''){
   <div class="field wide"><label>Observação (opcional)</label><textarea id="fObs">${esc(b?.obs||'')}</textarea></div>
  </div>`,`<button class="btn dark" onclick="closeModal()">CANCELAR</button><button class="btn primary" onclick="saveBooking('${editId}')">SALVAR</button>`);
 }
-function saveBooking(id){
+async function saveBooking(id){
  const start=fStart.value,end=fEnd.value,carId=fCar.value;
  if(!start||!end||new Date(end)<=new Date(start))return alert('Informe um período válido.');
  const conflict=data.bookings.some(b=>b.id!==id&&b.carId===carId&&b.status!=='DEVOLVIDO'&&new Date(start)<new Date(b.end)&&new Date(end)>new Date(b.start));
@@ -314,7 +314,7 @@ function previewCarPhoto(input){
   reader.onload=()=>{cphotoPreview.src=reader.result;cphotoPreview.dataset.value=reader.result};
   reader.readAsDataURL(file);
 }
-async async function addCar(){
+async function addCar(){
   let model=cm.value.trim(),plate=cp.value.trim().toUpperCase(),n=Number(cn.value);
   if(!model)return alert('Preencha o nome/modelo do carro.');
   if(!plate)return alert('Preencha a placa.');
@@ -343,7 +343,7 @@ function previewEditPhoto(input){
   if(file.size>4*1024*1024){alert('Escolha uma foto de até 4 MB.');input.value='';return}
   const reader=new FileReader();reader.onload=()=>{ecPreview.src=reader.result;ecPreview.dataset.value=reader.result};reader.readAsDataURL(file);
 }
-async async function saveCarEdit(id){
+async function saveCarEdit(id){
   const c=car(id);if(!c)return;
   const n=Number(ecn.value);
   if(!ecm.value.trim()||!ecp.value.trim())return alert('Preencha nome e placa.');
@@ -406,7 +406,8 @@ async function initApp(){
     const remote=await loadFleetData();
     if(remote && typeof remote==='object'){
       data={cars:Array.isArray(remote.cars)?remote.cars:[],employees:Array.isArray(remote.employees)?remote.employees:[],bookings:Array.isArray(remote.bookings)?remote.bookings:[],history:Array.isArray(remote.history)?remote.history:[]};
-    }else{
+    }
+    if(!data.cars.length){
       data.cars=[{id:uuid(),model:'ESTRADA',seats:2,plate:'A DEFINIR',number:1,photo:DEFAULT_CAR_PHOTO},{id:uuid(),model:'FIAT STRADA',seats:2,plate:'A DEFINIR',number:2,photo:DEFAULT_CAR_PHOTO}];
       await save();
     }
