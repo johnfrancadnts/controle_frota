@@ -643,7 +643,7 @@ function durationStr(ms){
 function previewCarPhoto(input){
   const file=input.files?.[0];
   if(!file)return;
-  if(file.size>4*1024*1024){alert('Escolha uma foto de até 4 MB.');input.value='';return}
+  if(file.size>10*1024*1024){alert('Escolha uma foto de até 10 MB.');input.value='';return}
   const reader=new FileReader();
   reader.onload=()=>{cphotoPreview.src=reader.result;cphotoPreview.dataset.value=reader.result};
   reader.readAsDataURL(file);
@@ -675,14 +675,27 @@ async function addCar(){
   const file=document.getElementById('cphoto')?.files?.[0];
   if(file){
     try{
+      const ext=(file.name.split('.').pop()||'png').toLowerCase();
+      const allowed=['png','jpg','jpeg','webp','gif'];
+      if(!allowed.includes(ext) && !String(file.type||'').startsWith('image/')){
+        throw new Error('FORMATO_INVALIDO');
+      }
       const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-      const ref=storage.ref(`carros/${id}-${Date.now()}-${safeName}`);
-      await ref.put(file);
+      const contentType=file.type || (ext==='png'?'image/png':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/jpeg');
+      const ref=storage.ref(`carros/${id}/${Date.now()}-${safeName}`);
+      await ref.put(file,{contentType,cacheControl:'public,max-age=31536000'});
       carObj.photo=await ref.getDownloadURL();
+      carObj.photoName=safeName;
+      carObj.photoType=contentType;
       await save();
     }catch(e){
       console.error('Erro ao enviar foto:',e);
-      alert('O carro foi salvo, mas a foto não pôde ser enviada. Verifique as regras do Storage.');
+      const code=e?.code||'';
+      if(e?.message==='FORMATO_INVALIDO') alert('O arquivo precisa ser uma imagem PNG, JPG, JPEG, WEBP ou GIF.');
+      else if(code==='storage/unauthorized') alert('A foto foi recusada pelo Firebase Storage. É necessário ajustar as regras do Storage para permitir o envio.');
+      else if(code==='storage/canceled') alert('O envio da foto foi cancelado.');
+      else if(code==='storage/quota-exceeded') alert('O armazenamento do Firebase atingiu a cota.');
+      else alert('Não foi possível enviar a foto PNG ao Firebase Storage. Código: '+(code||'erro desconhecido'));
     }
   }
 
@@ -702,7 +715,7 @@ function editCar(id){
 }
 function previewEditPhoto(input){
   const file=input.files?.[0]; if(!file)return;
-  if(file.size>4*1024*1024){alert('Escolha uma foto de até 4 MB.');input.value='';return}
+  if(file.size>10*1024*1024){alert('Escolha uma foto de até 10 MB.');input.value='';return}
   const reader=new FileReader();reader.onload=()=>{ecPreview.src=reader.result;ecPreview.dataset.value=reader.result};reader.readAsDataURL(file);
 }
 async function saveCarEdit(id){
@@ -714,8 +727,18 @@ async function saveCarEdit(id){
   c.model=ecm.value.trim();c.plate=ecp.value.trim().toUpperCase();c.seats=Number(ecs.value);c.number=n;
   const file=document.getElementById('ecPhoto')?.files?.[0];
   if(file){
-    try{ const ref=storage.ref(`carros/${id}-${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`); await ref.put(file); c.photo=await ref.getDownloadURL(); }
-    catch(e){ console.error(e); return alert('Não foi possível enviar a nova foto ao Firebase.'); }
+    try{
+      const ext=(file.name.split('.').pop()||'png').toLowerCase();
+      const contentType=file.type || (ext==='png'?'image/png':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/jpeg');
+      const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+      const ref=storage.ref(`carros/${id}/${Date.now()}-${safeName}`);
+      await ref.put(file,{contentType,cacheControl:'public,max-age=31536000'});
+      c.photo=await ref.getDownloadURL();
+      c.photoName=safeName; c.photoType=contentType;
+    }catch(e){
+      console.error('Erro ao substituir foto:',e);
+      return alert('Não foi possível enviar a nova foto ao Firebase Storage. Código: '+(e?.code||'erro desconhecido'));
+    }
   }
   await save();closeModal();adminTab('cars');render();
 }
